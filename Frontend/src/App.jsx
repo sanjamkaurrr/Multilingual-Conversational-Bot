@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 // ---------- Chat Component ----------
@@ -8,13 +8,47 @@ function Chat() {
   ]);
   const [input, setInput] = useState("");
   const [lang, setLang] = useState("en");
+  const [volume, setVolume] = useState(1);
+  const [theme, setTheme] = useState("light");
+
+  const recognitionRef = useRef(null);
+
+  // Setup Speech Recognition
+  if (!recognitionRef.current) {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (SpeechRecognition) {
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+    }
+  }
+
+  // 🎤 Start Listening
+  const startListening = () => {
+    if (!recognitionRef.current) return;
+
+    recognitionRef.current.lang = lang === "hi" ? "hi-IN" : "en-US";
+    recognitionRef.current.start();
+
+    recognitionRef.current.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(transcript);
+    };
+  };
+
+  // 🔊 Speak Text
+  const speak = (text) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.volume = volume;
+    utterance.lang = lang === "hi" ? "hi-IN" : "en-US";
+
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  };
 
   const sendMessage = async () => {
-    console.log("📨 Send clicked");
-    if (!input.trim()) {
-      console.log("⚠️ Empty input, not sending");
-      return;
-    }
+    if (!input.trim()) return;
 
     const userMsg = { sender: "user", text: input };
     setMessages((prev) => [...prev, userMsg]);
@@ -35,41 +69,63 @@ function Chat() {
       };
 
       setMessages((prev) => [...prev, botMsg]);
+
+      // 🔊 Auto speak reply
+      speak(botMsg.text);
+
     } catch (err) {
       console.error("❌ Error talking to backend:", err);
-      setMessages((prev) => [
-        ...prev,
-        { sender: "bot", text: "Server error. Please try again later." }
-      ]);
+      const errorMsg = {
+        sender: "bot",
+        text: "Server error. Please try again later."
+      };
+      setMessages((prev) => [...prev, errorMsg]);
+      speak(errorMsg.text);
     }
   };
 
   return (
-    <div style={styles.container}>
-      {/* Language Switch */}
-      <div style={styles.langBar}>
+    <div
+      style={{
+        ...styles.container,
+        background: theme === "light" ? "#f5f7fa" : "#121212",
+        color: theme === "light" ? "#000" : "#fff"
+      }}
+    >
+      {/* Top Controls */}
+      <div style={styles.topBar}>
         <button
-          onClick={() => setLang("en")}
-          style={{
-            ...styles.langBtn,
-            background: lang === "en" ? "#4f46e5" : "#e5e7eb",
-            color: lang === "en" ? "#fff" : "#000"
-          }}
+          onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+          style={styles.toggleBtn}
         >
-          English
+          {theme === "light" ? "🌙 Dark" : "☀ Light"}
         </button>
-        <button
-          onClick={() => setLang("hi")}
-          style={{
-            ...styles.langBtn,
-            background: lang === "hi" ? "#4f46e5" : "#e5e7eb",
-            color: lang === "hi" ? "#fff" : "#000"
-          }}
-        >
-          हिंदी
-        </button>
+
+        <div style={styles.langBar}>
+          <button
+            onClick={() => setLang("en")}
+            style={{
+              ...styles.langBtn,
+              background: lang === "en" ? "#4f46e5" : "#e5e7eb",
+              color: lang === "en" ? "#fff" : "#000"
+            }}
+          >
+            English
+          </button>
+          <button
+            onClick={() => setLang("hi")}
+            style={{
+              ...styles.langBtn,
+              background: lang === "hi" ? "#4f46e5" : "#e5e7eb",
+              color: lang === "hi" ? "#fff" : "#000"
+            }}
+          >
+            हिंदी
+          </button>
+        </div>
       </div>
 
+      {/* Chat Messages */}
       <div style={styles.chatBox}>
         {messages.map((msg, idx) => (
           <div
@@ -77,7 +133,11 @@ function Chat() {
             style={{
               ...styles.message,
               alignSelf: msg.sender === "user" ? "flex-end" : "flex-start",
-              background: msg.sender === "user" ? "#DCF8C6" : "#f1f1f1"
+              background: msg.sender === "user"
+                ? "#DCF8C6"
+                : theme === "light"
+                ? "#f1f1f1"
+                : "#333"
             }}
           >
             {msg.text}
@@ -85,7 +145,12 @@ function Chat() {
         ))}
       </div>
 
+      {/* Input Section */}
       <div style={styles.inputBox}>
+        <button onClick={startListening} style={styles.micButton}>
+          🎤
+        </button>
+
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -97,9 +162,24 @@ function Chat() {
           style={styles.input}
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
         />
+
         <button onClick={sendMessage} style={styles.button}>
           Send
         </button>
+      </div>
+
+      {/* Volume Control */}
+      <div style={{ marginTop: "10px" }}>
+        🔊 Volume
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.1"
+          value={volume}
+          onChange={(e) => setVolume(parseFloat(e.target.value))}
+          style={{ marginLeft: "10px" }}
+        />
       </div>
     </div>
   );
@@ -114,7 +194,7 @@ function FullPageChat() {
   );
 }
 
-// ---------- App (Router) ----------
+// ---------- App ----------
 export default function App() {
   return (
     <BrowserRouter>
@@ -131,15 +211,16 @@ const styles = {
     height: "100vh",
     display: "flex",
     flexDirection: "column",
-    justifyContent: "flex-start",
-    alignItems: "center",
-    background: "#f5f7fa",
     padding: "10px"
   },
+  topBar: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "8px"
+  },
   chatBox: {
-    width: "100%",
-    maxWidth: "100%",
-    height: "100%",
+    flex: 1,
     background: "#fff",
     borderRadius: "10px",
     padding: "15px",
@@ -153,12 +234,9 @@ const styles = {
     padding: "10px 14px",
     borderRadius: "18px",
     marginBottom: "10px",
-    fontSize: "14px",
-    lineHeight: "1.4"
+    fontSize: "14px"
   },
   inputBox: {
-    width: "100%",
-    maxWidth: "100%",
     display: "flex",
     marginTop: "10px"
   },
@@ -178,12 +256,22 @@ const styles = {
     color: "#fff",
     cursor: "pointer"
   },
+  micButton: {
+    marginRight: "8px",
+    padding: "10px",
+    borderRadius: "50%",
+    border: "none",
+    background: "#e5e7eb",
+    cursor: "pointer"
+  },
+  toggleBtn: {
+    padding: "6px 12px",
+    borderRadius: "20px",
+    border: "none",
+    cursor: "pointer"
+  },
   langBar: {
-    width: "100%",
-    maxWidth: "400px",
     display: "flex",
-    justifyContent: "flex-end",
-    marginBottom: "8px",
     gap: "8px"
   },
   langBtn: {
