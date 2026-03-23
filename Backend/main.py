@@ -2,15 +2,52 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import logging
-import time
-from googletrans import Translator
-translator = Translator()
+from deep_translator import GoogleTranslator
+from chitchat import get_chitchat_response
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from Data_loader import load_qa
+from search import fuzzy_search
 
 
-from Data_loader import load_qa   # 👈 your existing import
-from search import fuzzy_search  # 👈 your existing import
+class QueryRequest(BaseModel):
+    question: str
+    lang: str = "en"
 
-# =========================
+
+class SuggestionRequest(BaseModel):
+    partial_question: str
+    lang: str = "en"
+
+
+def translate_hi_to_en(text: str) -> str:
+    if not text.strip():
+        return text
+    return GoogleTranslator(source="hi", target="en").translate(text)
+
+
+def translate_en_to_hi(text: str) -> str:
+    if not text.strip():
+        return text
+    return GoogleTranslator(source="en", target="hi").translate(text)
+
+
+def get_suggestions(partial_question: str, qa_pairs, limit: int = 5):
+    query = partial_question.strip().lower()
+    if not query:
+        return []
+
+    matches = [
+        item["question"]
+        for item in qa_pairs
+        if query in item["question"].lower()
+    ]
+    return matches[:limit]
+
+
 # 🔧 LOGGING CONFIG
 # =========================
 logging.basicConfig(
@@ -33,62 +70,63 @@ app.add_middleware(
 # 📦 LOAD DATA
 # =========================
 logger.info("📂 Loading QA data from Excel...")
-qa_data = load_qa("qa.xlsx")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+qa_data = load_qa(os.path.join(BASE_DIR, "qa.xlsx"))
 logger.info(f"✅ QA data loaded. Total entries: {len(qa_data)}")
 
 # =========================
-# 🧾 REQUEST MODEL
+# 💡 SUGGESTION ENDPOINT
 # =========================
-class QueryRequest(BaseModel):
-    question: str
-    lang: str = "en"   # 🌐 NEW: language support
 
-# =========================
-# 🌐 TRANSLATION HOOKS 
-# =========================
-def translate_hi_to_en(text: str) -> str:
-    logger.info(f"🌐 [translate_hi_to_en] Input: {text}")
-    return translator.translate(text, src="hi", dest="en").text
+@app.post("/suggest")
+def suggest(req: SuggestionRequest):
+    logger.info(f"💡 Suggest request: {req.partial_question}")
 
-def translate_en_to_hi(text: str) -> str:
-    logger.info(f"🌐 [translate_en_to_hi] Input: {text}")
-    return translator.translate(text, src="en", dest="hi").text
+    # Translate if needed
+    if req.lang == "hi":
+        partial_en = translate_hi_to_en(req.partial_question)
+    else:
+        partial_en = req.partial_question
+
+    suggestions_en = get_suggestions(partial_en, qa_data)
+
+    # Translate back
+    if req.lang == "hi":
+        suggestions = [translate_en_to_hi(s) for s in suggestions_en]
+    else:
+        suggestions = suggestions_en
+
+    return {"suggestions": suggestions}
+
 
 # =========================
 # 🤖 CHAT ENDPOINT
 # =========================
 @app.post("/chat")
 def chat(req: QueryRequest):
-    start_time = time.time()
 
-    logger.info("📩 Incoming /chat request")
-    logger.info(f"👤 Question from UI: {req.question}")
-    logger.info(f"🌐 Language selected: {req.lang}")
-
-    # Translate Hindi -> English if needed (hook)
+    # 🌐 Translate if needed
     if req.lang == "hi":
         user_question_en = translate_hi_to_en(req.question)
     else:
         user_question_en = req.question
 
-    # 🔎 Fuzzy search (your existing logic)
-    logger.info("🔍 Running fuzzy search...")
+    # 🔥 STEP 1: Check chit-chat FIRST
+    chit_response = get_chitchat_response(user_question_en)
+
+    if chit_response:
+        if req.lang == "hi":
+            chit_response = translate_en_to_hi(chit_response)
+
+        return {"answer": chit_response}
+
+    # 🔍 STEP 2: Normal search
     answer_en, score = fuzzy_search(user_question_en, qa_data)
 
-    logger.info(f"🎯 Fuzzy match score: {score}")
-
-    # Translate back if Hindi (hook)
+    # 🌐 Translate back
     if req.lang == "hi":
         final_answer = translate_en_to_hi(answer_en)
     else:
         final_answer = answer_en
 
-    # Truncate long logs
-    logger.info(f"📤 Final answer sent (preview): {final_answer[:80]}...")
-
-    elapsed = round((time.time() - start_time) * 1000, 2)
-    logger.info(f"⏱️ Request handled in {elapsed} ms")
-
-    return {
-        "answer": final_answer,
-    }
+    return {"answer": final_answer}
